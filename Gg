@@ -1,0 +1,243 @@
+-- SERVICES
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+
+local LocalPlayer = Players.LocalPlayer
+local Plots = Workspace:WaitForChild("Plots")
+
+-- CONFIG
+local BASE_HOME_DISTANCE = 15
+local UPDATE_INTERVAL = 0.5 -- Loop rápido sem travar
+
+-- =====================================================
+-- CACHE: STRUCTURE BASE HOMES
+-- =====================================================
+local BaseHomes = {}
+local BasePositions = {}
+
+local function cacheBaseHomes()
+    table.clear(BaseHomes)
+    table.clear(BasePositions)
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj.Name == "structure base home" and obj:IsA("BasePart") then
+            table.insert(BaseHomes, obj)
+            table.insert(BasePositions, obj.Position)
+        end
+    end
+end
+cacheBaseHomes()
+
+Workspace.DescendantAdded:Connect(function(obj)
+    if obj.Name == "structure base home" and obj:IsA("BasePart") then
+        table.insert(BaseHomes, obj)
+        table.insert(BasePositions, obj.Position)
+    end
+end)
+
+Workspace.DescendantRemoving:Connect(function(obj)
+    if obj.Name == "structure base home" and obj:IsA("BasePart") then
+        for i = #BaseHomes, 1, -1 do
+            if BaseHomes[i] == obj then
+                table.remove(BaseHomes, i)
+                table.remove(BasePositions, i)
+                break
+            end
+        end
+    end
+end)
+
+local function isNearBaseHome(part)
+    for i = 1, #BasePositions do
+        if (BasePositions[i] - part.Position).Magnitude <= BASE_HOME_DISTANCE then
+            return true
+        end
+    end
+    return false
+end
+
+-- =====================================================
+-- CACHE: FAST OVERHEAD TEMPLATE + VALORES + TEXTO ORIGINAL
+-- =====================================================
+local FastTemplates = {}
+local TemplateValues = {}
+local TemplateTexts = {}
+
+local function parseMoney(text)
+    if not text then return 0 end
+    text = text:gsub(",", ".")
+    local n,s = text:match("%$(%d+%.?%d*)([KMBT]?)/s")
+    n = tonumber(n)
+    if not n then return 0 end
+    local m = {K=1e3,M=1e6,B=1e9,T=1e12}
+    return s and m[s] and n*m[s] or n
+end
+
+local function updateTemplateValue(obj)
+    local maxVal = 0
+    local displayText = ""
+    for _, ui in ipairs(obj:GetDescendants()) do
+        if ui:IsA("TextLabel") or ui:IsA("TextButton") then
+            local v = parseMoney(ui.Text)
+            if v > maxVal then
+                maxVal = v
+                displayText = ui.Text
+            end
+        end
+    end
+    TemplateValues[obj] = maxVal
+    TemplateTexts[obj] = displayText
+end
+
+-- Inicializa cache
+for _, obj in ipairs(Workspace:GetDescendants()) do
+    if obj.Name == "FastOverheadTemplate" then
+        table.insert(FastTemplates, obj)
+        updateTemplateValue(obj)
+    end
+end
+
+-- Atualiza cache ao adicionar/remover
+Workspace.DescendantAdded:Connect(function(obj)
+    if obj.Name == "FastOverheadTemplate" then
+        table.insert(FastTemplates, obj)
+        updateTemplateValue(obj)
+    end
+end)
+
+Workspace.DescendantRemoving:Connect(function(obj)
+    if obj.Name == "FastOverheadTemplate" then
+        for i = #FastTemplates,1,-1 do
+            if FastTemplates[i] == obj then
+                table.remove(FastTemplates, i)
+                TemplateValues[obj] = nil
+                TemplateTexts[obj] = nil
+                break
+            end
+        end
+    end
+end)
+
+-- =====================================================
+-- GUI
+-- =====================================================
+local currentGui = Instance.new("BillboardGui")
+currentGui.Name = "FAST_BEST_TEXT"
+currentGui.Size = UDim2.fromScale(18,7)
+currentGui.AlwaysOnTop = true
+currentGui.Parent = Workspace
+
+local label = Instance.new("TextLabel")
+label.Size = UDim2.fromScale(1,1)
+label.BackgroundTransparency = 1
+label.TextSize = 34
+label.Font = Enum.Font.SourceSansBold
+label.TextStrokeTransparency = 0
+label.TextStrokeColor3 = Color3.new(0,0,0)
+label.RichText = true
+label.TextXAlignment = Enum.TextXAlignment.Center
+label.TextYAlignment = Enum.TextYAlignment.Top
+label.Parent = currentGui
+
+-- =====================================================
+-- LINE PART
+-- =====================================================
+local linePart = Instance.new("Part")
+linePart.Anchored = true
+linePart.CanCollide = false
+linePart.Material = Enum.Material.Neon
+linePart.Color = Color3.fromRGB(255,0,0)
+linePart.Transparency = 1
+linePart.Size = Vector3.new(0.35,0.35,1)
+linePart.Parent = Workspace
+
+-- =====================================================
+-- PET CACHE
+-- =====================================================
+local lastPetPart
+local lastPetName = "PET"
+
+local function getClosestPetName(part)
+    if lastPetPart == part then
+        return lastPetName
+    end
+    local name, dist = "PET", math.huge
+    for _, plot in ipairs(Plots:GetChildren()) do
+        for _, pet in ipairs(plot:GetChildren()) do
+            if pet:IsA("Model") then
+                local bp = pet:FindFirstChildWhichIsA("BasePart", true)
+                if bp then
+                    local d = (bp.Position - part.Position).Magnitude
+                    if d < dist then
+                        dist = d
+                        name = pet.Name
+                    end
+                end
+            end
+        end
+    end
+    lastPetPart = part
+    lastPetName = name
+    return name
+end
+
+-- =====================================================
+-- LOOP PRINCIPAL ZERO LAG
+-- =====================================================
+local currentESPPart, currentMaxValue, currentPetName, currentDisplayText = nil, 0, "PET", "$0/s"
+
+task.spawn(function()
+    while true do
+        local bestValue = 0
+        local bestPart = nil
+        local bestPet = "PET"
+        local bestText = "$0/s"
+
+        for _, obj in ipairs(FastTemplates) do
+            local part = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+            if part and isNearBaseHome(part) then
+                local maxVal = TemplateValues[obj] or 0
+                if maxVal >= 1 and maxVal > bestValue then
+                    bestValue = maxVal
+                    bestPart = part
+                    bestPet = getClosestPetName(part)
+                    bestText = TemplateTexts[obj] or "$0/s"
+                end
+            end
+        end
+
+        currentESPPart = bestPart
+        currentMaxValue = bestValue
+        currentPetName = bestPet
+        currentDisplayText = bestText
+
+        task.wait(UPDATE_INTERVAL)
+    end
+end)
+
+-- =====================================================
+-- RENDER ESP
+-- =====================================================
+RunService.RenderStepped:Connect(function()
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+
+    if currentESPPart and hrp and currentMaxValue >= 1 then
+        local startPos = hrp.Position
+        local endPos = currentESPPart.Position
+        local dist = (endPos - startPos).Magnitude
+
+        linePart.Transparency = 0.3
+        linePart.Size = Vector3.new(0.35,0.35,dist)
+        linePart.CFrame = CFrame.lookAt(startPos,endPos) * CFrame.new(0,0,-dist/2)
+
+        currentGui.Adornee = currentESPPart
+        currentGui.StudsOffsetWorldSpace = Vector3.new(0,-4.5,0)
+
+        label.Text =
+            "<font color='rgb(255,255,255)'>"..currentPetName.."</font>\n"..
+            "<font color='rgb(0,255,0)'>"..currentDisplayText.."</font>"
+    else
+        linePart.Transparency = 1
+        currentGui.Adornee = nil
+    end
+end)
