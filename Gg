@@ -1,3 +1,9 @@
+-- 3️⃣ ESP BEST
+_G.WXV = _G.WXV or {}
+_G.WXV.ESP_BEST = _G.WXV.ESP_BEST or false
+if not _G.WXV.ESP_BEST then return end
+
+-- Código do ESP BEST aqui
 -- SERVICES
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
